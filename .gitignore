@@ -1,0 +1,6 @@
+.vscode
+__pycache__/
+lightweight_gan.egg-info
+models
+results
+*.sh
