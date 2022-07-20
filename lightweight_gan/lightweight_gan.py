@@ -1055,11 +1055,11 @@ class Trainer():
             anchor_label=self.anchor_label, crop_seed=self.crop_seed, resize_mode=self.resize_mode,
             _expand_grayscale=expand_greyscale)
         self.val_dataset = SceneDataset(
-            folder, self.image_size, split_file=self.split_file+'/val_split.csv', label_mode=self.label_mode,
+            folder, self.image_size, split_file=self.split_file+'/train_split.csv', label_mode=self.label_mode,
             anchor_label=self.anchor_label, crop_seed=self.crop_seed, resize_mode=self.resize_mode,
             _expand_grayscale=expand_greyscale)
         self.test_dataset = SceneDataset(
-            folder, self.image_size, split_file=self.split_file+'/test_split.csv', label_mode=self.label_mode,
+            folder, self.image_size, split_file=self.split_file+'/train_split.csv', label_mode=self.label_mode,
             anchor_label=self.anchor_label, crop_seed=self.crop_seed, resize_mode=self.resize_mode,
             _expand_grayscale=expand_greyscale)
 
@@ -1308,20 +1308,23 @@ class Trainer():
 
         label_visualizer = LabelVisualizer(self.image_size)
 
-        # regular
-        if 'default' in types:
-            for i in tqdm(range(num_image_tiles), desc='Saving generated default images'):
-                latents = torch.randn((1, latent_dim)).cuda(self.rank)
-                image_dict = next(self.test_loader)
-                empty_image_batch = image_dict['empty_image'].cuda(self.rank)
-                labels_batch = image_dict['objs_label'].cuda(self.rank)
-                labels_rgb = label_visualizer.convert_labels(labels_batch, dilate=10)
+        if num_image_tiles == -1:
+            num_image_tiles = len(self.test_dataset)
 
-                generated_image = self.generate_(self.GAN.G, latents, labels_batch, empty_image_batch)
-                path = str(self.results_dir / dir_name / f'{str(num)}-{str(i)}-orig.{ext}')
-                label_path = str(self.results_dir / dir_name / f'{str(num)}-{str(i)}-orig-label.{ext}')
-                torchvision.utils.save_image(generated_image[0], path, nrow=1)
-                torchvision.utils.save_image(labels_rgb[0], label_path, nrow=1)
+        # regular
+        # if 'default' in types:
+        #     for i in tqdm(range(num_image_tiles), desc='Saving generated default images'):
+        #         latents = torch.randn((1, latent_dim)).cuda(self.rank)
+        #         image_dict = next(self.test_loader)
+        #         empty_image_batch = image_dict['empty_image'].cuda(self.rank)
+        #         labels_batch = image_dict['objs_label'].cuda(self.rank)
+        #         labels_rgb = label_visualizer.convert_labels(labels_batch, dilate=10)
+
+        #         generated_image = self.generate_(self.GAN.G, latents, labels_batch, empty_image_batch)
+        #         path = str(self.results_dir / dir_name / f'{str(num)}-{str(i)}-orig.{ext}')
+        #         label_path = str(self.results_dir / dir_name / f'{str(num)}-{str(i)}-orig-label.{ext}')
+        #         torchvision.utils.save_image(generated_image[0], path, nrow=1)
+        #         torchvision.utils.save_image(labels_rgb[0], label_path, nrow=1)
 
         # moving averages
         if 'ema' in types:

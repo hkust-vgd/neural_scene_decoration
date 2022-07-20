@@ -57,6 +57,19 @@ class FixedParamsRandomCrop(transforms.RandomCrop):
         return F.crop(img, *self.params)
 
 
+class FixedParamsStaticCrop(torch.nn.Module):
+    def __init__(self, x_crop):
+        super().__init__()
+        self.x_crop = x_crop
+        self.cur_id = None
+    
+    def forward(self, img):
+        assert self.cur_id is not None
+        xpos = self.x_crop[self.cur_id] * (MAX_X + SIZE) / WIDTH
+        xpos = np.floor(xpos).astype(int)
+        return F.crop(img, 0, xpos, SIZE, SIZE)
+
+
 class ToOnehotTensor(torch.nn.Module):
     def __init__(self):
         super(ToOnehotTensor, self).__init__()
@@ -175,6 +188,12 @@ class SceneDataset(Dataset):
         split_path = os.path.join(self.folder, 'splits', split_file)
         paths_np = np.genfromtxt(split_path, dtype='|U', delimiter=',')
 
+        assert len(paths_np.shape) == 2 and paths_np.shape[1] in [3, 4]
+        x_crop = None
+        if paths_np.shape[1] == 4:
+            x_crop = [int(i) for i in paths_np[:, -1]]
+            paths_np = paths_np[:, :3]
+
         paths_fmts = {
             'full': '{}/data/{}/2D_rendering/{}/perspective/full/{}/rgb_rawlight.png',
             'empty': '{}/data/{}/2D_rendering/{}/perspective/empty/{}/rgb_rawlight.png',
@@ -195,14 +214,17 @@ class SceneDataset(Dataset):
             self.paths[item] = [Path(paths_fmts[item].format(self.folder, *record)) for record in paths_np]
         assert len(self.paths[items[0]]) != 0
 
-        self.random_crop = FixedParamsRandomCrop(image_size, crop_seed)
+        if x_crop is None:
+            self.crop = FixedParamsRandomCrop(image_size, crop_seed)
+        else:
+            self.crop = FixedParamsStaticCrop(x_crop)
 
         expand_fn = _expand_grayscale(False)
         self.resize_mode = resize_mode
         if resize_mode == 'random':
             resize_transform = [
                 transforms.Resize(image_size),
-                self.random_crop
+                self.crop
             ]
         elif resize_mode == 'full':
             resize_transform = [
@@ -219,32 +241,22 @@ class SceneDataset(Dataset):
             transforms.Lambda(expand_fn)
         ])
 
-        self.mask_transform = transforms.Compose([
-            transforms.Resize(image_size),
-            self.random_crop,
-            transforms.ToTensor()
-        ])
-
         if label_mode == 'point':
-            # label_transforms = [
-            #     self.random_crop,
-            #     convert_onehot_tensor
-            # ]
             label_transforms = [
                 PointsToTensor(),
                 transforms.Resize(image_size),
-                self.random_crop
+                self.crop
             ]
         elif label_mode == 'box':
             label_transforms = [
                 BoxesToTensor(),
                 transforms.Resize(image_size),
-                self.random_crop
+                self.crop
             ]
         elif label_mode == 'semantic':
             label_transforms = [
                 transforms.Resize(image_size),
-                self.random_crop,
+                self.crop,
                 ToOnehotTensor()
             ]
         else:
@@ -258,18 +270,19 @@ class SceneDataset(Dataset):
     def __getitem__(self, index):
         full_path = self.paths['full'][index]
         empty_path = self.paths['empty'][index]
-        mask_path = self.paths['mask'][index]
         objs_json_path = self.paths['objs_json'][index]
 
         full_img = Image.open(full_path)
         empty_img = Image.open(empty_path)
-        mask_img = Image.open(mask_path)
 
         with open(objs_json_path, 'r') as f:
             objs_json = json.load(f)
         xpos_range = get_crop_pos(objs_json, anchor_label=self.anchor_label)
 
-        self.random_crop.reset(xpos_range)
+        if isinstance(self.crop, FixedParamsRandomCrop):
+            self.crop.reset(xpos_range)
+        else:
+            self.crop.cur_id = index
 
         labels = None
         if self.label_mode == 'point':
@@ -287,7 +300,6 @@ class SceneDataset(Dataset):
         img_dict = {
             'full_image': self.transform(full_img),
             'empty_image': self.transform(empty_img),
-            'bg_mask': self.mask_transform(mask_img),
             'objs_label': labels
         }
 
