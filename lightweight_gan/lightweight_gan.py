@@ -1048,20 +1048,26 @@ class Trainer():
             'freq_chan_attn': self.freq_chan_attn
         }
 
-    def set_data_src(self, folder, eval_mode=False):
+    def set_data_src(self, folder, split_file=None, eval_mode=False):
         num_workers = default(self.num_workers, math.ceil(NUM_CORES / self.world_size))
+        if split_file is not None:
+            split_files = [self.split_file + '/train_split.csv' for _ in range(3)]
+            panorama = False
+        else:
+            split_files = ['train/0', 'validate/0', 'test/0']
+            panorama = True
         self.train_dataset = SceneDataset(
-            folder, self.image_size, split_file=self.split_file+'/train_split.csv', label_mode=self.label_mode,
+            folder, self.image_size, split_file=split_files[0], label_mode=self.label_mode,
             anchor_label=self.anchor_label, crop_seed=self.crop_seed, resize_mode=self.resize_mode,
-            _expand_grayscale=expand_greyscale)
+            _expand_grayscale=expand_greyscale, panorama=panorama)
         self.val_dataset = SceneDataset(
-            folder, self.image_size, split_file=self.split_file+'/train_split.csv', label_mode=self.label_mode,
+            folder, self.image_size, split_file=split_files[1], label_mode=self.label_mode,
             anchor_label=self.anchor_label, crop_seed=self.crop_seed, resize_mode=self.resize_mode,
-            _expand_grayscale=expand_greyscale)
+            _expand_grayscale=expand_greyscale, panorama=panorama)
         self.test_dataset = SceneDataset(
-            folder, self.image_size, split_file=self.split_file+'/train_split.csv', label_mode=self.label_mode,
+            folder, self.image_size, split_file=split_files[2], label_mode=self.label_mode,
             anchor_label=self.anchor_label, crop_seed=self.crop_seed, resize_mode=self.resize_mode,
-            _expand_grayscale=expand_greyscale)
+            _expand_grayscale=expand_greyscale, panorama=panorama)
 
         sampler = DistributedSampler(self.train_dataset, rank=self.rank, num_replicas=self.world_size, shuffle=True) if self.is_ddp else None
 
@@ -1196,7 +1202,8 @@ class Trainer():
             latents = torch.randn(batch_size, latent_dim).cuda(self.rank)
             image_dict = next(self.train_loader)
             empty_image_batch = image_dict['empty_image'].cuda(self.rank)
-            masks_batch = image_dict['bg_mask'].cuda(self.rank)
+            if 'bg_mask' in image_dict.keys():
+                masks_batch = image_dict['bg_mask'].cuda(self.rank)
             labels_batch = image_dict['objs_label'].cuda(self.rank)
 
             with amp_context():
@@ -1204,7 +1211,10 @@ class Trainer():
                 fake_output, fake_label_output, fake_output_32x32, _ = D_aug(generated_images, labels_batch, **aug_kwargs)
                 fake_output_loss = fake_output.mean(dim=1) + fake_output_32x32.mean(dim=1)
 
-                recon_loss = masked_mse_loss(empty_image_batch, generated_images, masks_batch)
+                if 'bg_mask' in image_dict.keys():
+                    recon_loss = masked_mse_loss(empty_image_batch, generated_images, masks_batch)
+                else:
+                    recon_loss = 0
 
                 if self.label_coeff is not None:
                     fake_output_loss += fake_label_output.mean(dim=1) * self.label_coeff

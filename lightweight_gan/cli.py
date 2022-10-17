@@ -36,7 +36,7 @@ def set_seed(seed):
     np.random.seed(seed)
     random.seed(seed)
 
-def run_training(rank, world_size, model_args, data, load_from, new, num_train_steps, name, seed):
+def run_training(rank, world_size, model_args, data, split_file, load_from, new, num_train_steps, name, seed):
     is_main = rank == 0
     is_ddp = world_size > 1
 
@@ -64,7 +64,7 @@ def run_training(rank, world_size, model_args, data, load_from, new, num_train_s
     else:
         model.clear()
 
-    model.set_data_src(data)
+    model.set_data_src(data, split_file)
 
     for _ in tqdm(range(num_train_steps - model.steps), initial = model.steps, total = num_train_steps, mininterval=10., desc=f'{name}<{data}>'):
         retry_call(model.train, tries=3, exceptions=NanException)
@@ -220,11 +220,11 @@ def train_from_folder(
     world_size = torch.cuda.device_count()
 
     if world_size == 1 or not multi_gpus:
-        run_training(0, 1, model_args, data, load_from, new, num_train_steps, name, seed)
+        run_training(0, 1, model_args, data, split_file, load_from, new, num_train_steps, name, seed)
         return
 
     mp.spawn(run_training,
-        args=(world_size, model_args, data, load_from, new, num_train_steps, name, seed),
+        args=(world_size, model_args, data, split_file, load_from, new, num_train_steps, name, seed),
         nprocs=world_size,
         join=True)
 

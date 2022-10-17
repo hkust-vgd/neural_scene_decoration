@@ -12,13 +12,20 @@ import torchvision.transforms.functional as F
 
 from scenegen.utils import convert_rgb, resize_to_minimum_size, convert_onehot_tensor
 
-HEIGHT = 720
-WIDTH = 1280
-SIZE = 256
-MARGIN = 25
+# HEIGHT = 720
+# WIDTH = 1280
+# SIZE = 256
+# MARGIN = 25
 # SIZE = 512
 # MARGIN = 50
-MAX_X = int((WIDTH - HEIGHT) / HEIGHT * SIZE)
+# MAX_X = int((WIDTH - HEIGHT) / HEIGHT * SIZE)
+
+# Panorama
+HEIGHT = 512
+WIDTH = 1024
+SIZE = 512
+MARGIN = -1
+MAX_X = -1
 
 CLASS_IDS = [3, 4, 5, 6, 7, 11, 16, 25, 32, 35]
 
@@ -38,6 +45,25 @@ def get_crop_pos(obj_json, anchor_label, margin=MARGIN):
         return int(left_xpos), int(right_xpos)
     else:
         return 0, MAX_X
+
+
+class PanoramaHorizontalAugment(torch.nn.Module):
+    def __init__(self, width):
+        super().__init__()
+        self.pos = 0
+        self.flip = False
+        self.width = width
+    
+    def reset(self):
+        self.pos = np.random.randint(0, self.width)
+        self.flip = np.random.rand() > 0.5
+    
+    def forward(self, img):
+        if self.flip:
+            img = F.hflip(img)
+        
+        img = torch.cat((img[..., self.pos:], img[..., :self.pos]), dim=-1)
+        return img
 
 
 class FixedParamsRandomCrop(transforms.RandomCrop):
@@ -177,47 +203,58 @@ class EvalDataset(Dataset):
 
 class SceneDataset(Dataset):
     def __init__(self, folder, image_size, split_file=None, label_mode='point', anchor_label=None,
-                 resize_mode='random', crop_seed=None, _expand_grayscale=None):
+                 resize_mode='random', crop_seed=None, _expand_grayscale=None, panorama=False):
         super(SceneDataset, self).__init__()
 
         self.folder = folder
         self.image_size = image_size
         self.label_mode = label_mode
         self.anchor_label = anchor_label
+        self.panorama = panorama
 
-        split_path = os.path.join(self.folder, 'splits', split_file)
-        paths_np = np.genfromtxt(split_path, dtype='|U', delimiter=',')
-
-        assert len(paths_np.shape) == 2 and paths_np.shape[1] in [3, 4]
-        x_crop = None
-        if paths_np.shape[1] == 4:
-            x_crop = [int(i) for i in paths_np[:, -1]]
-            paths_np = paths_np[:, :3]
-
-        paths_fmts = {
-            'full': '{}/data/{}/2D_rendering/{}/perspective/full/{}/rgb_rawlight.png',
-            'empty': '{}/data/{}/2D_rendering/{}/perspective/empty/{}/rgb_rawlight.png',
-            'semantic': '{}/data/{}/2D_rendering/{}/perspective/full/{}/semantic.png',
-            'mask': '{}/data/{}/2D_rendering/{}/perspective/full/{}/bg_mask.png',
-            'objs': '{}/data/{}/2D_rendering/{}/perspective/full/{}/objects.png',
-            'objs_json': '{}/data/{}/2D_rendering/{}/perspective/full/{}/objects.json'
-        }
-
-        self.paths = {}
-        items = ['full', 'empty', 'mask', 'objs_json']
-        if label_mode == 'point':
-            items.append('objs')
-        elif label_mode == 'semantic':
-            items.append('semantic')
-
-        for item in items:
-            self.paths[item] = [Path(paths_fmts[item].format(self.folder, *record)) for record in paths_np]
-        assert len(self.paths[items[0]]) != 0
-
-        if x_crop is None:
-            self.crop = FixedParamsRandomCrop(image_size, crop_seed)
+        if panorama:
+            self.paths = {}
+            self.paths['empty'] = sorted(list((Path(self.folder) / 'bedroom_empty_only_remove_wrongs' / split_file).glob('*.png')))
+            self.paths['full'] = sorted(list((Path(self.folder) / 'bedroom_full_only_remove_wrongs' / split_file).glob('*.png')))
+            # self.paths['objs_json'] = sorted(list((Path(self.folder) / 'objects' / split_file).glob('*.json')))
+            def obj_repl(p):
+                return str(p).replace('bedroom_full_only_remove_wrongs', 'objects').replace('full_rgb', 'objects').replace('png', 'json')
+            self.paths['objs_json'] = [Path(obj_repl(p)) for p in self.paths['full']]
+            self.crop = torch.nn.Identity()
         else:
-            self.crop = FixedParamsStaticCrop(x_crop)
+            split_path = os.path.join(self.folder, 'splits', split_file)
+            paths_np = np.genfromtxt(split_path, dtype='|U', delimiter=',')
+
+            assert len(paths_np.shape) == 2 and paths_np.shape[1] in [3, 4]
+            x_crop = None
+            if paths_np.shape[1] == 4:
+                x_crop = [int(i) for i in paths_np[:, -1]]
+                paths_np = paths_np[:, :3]
+
+            paths_fmts = {
+                'full': '{}/data/{}/2D_rendering/{}/perspective/full/{}/rgb_rawlight.png',
+                'empty': '{}/data/{}/2D_rendering/{}/perspective/empty/{}/rgb_rawlight.png',
+                'semantic': '{}/data/{}/2D_rendering/{}/perspective/full/{}/semantic.png',
+                'mask': '{}/data/{}/2D_rendering/{}/perspective/full/{}/bg_mask.png',
+                'objs': '{}/data/{}/2D_rendering/{}/perspective/full/{}/objects.png',
+                'objs_json': '{}/data/{}/2D_rendering/{}/perspective/full/{}/objects.json'
+            }
+
+            self.paths = {}
+            items = ['full', 'empty', 'mask', 'objs_json']
+            if label_mode == 'point':
+                items.append('objs')
+            elif label_mode == 'semantic':
+                items.append('semantic')
+
+            for item in items:
+                self.paths[item] = [Path(paths_fmts[item].format(self.folder, *record)) for record in paths_np]
+            assert len(self.paths[items[0]]) != 0
+
+            if x_crop is None:
+                self.crop = FixedParamsRandomCrop(image_size, crop_seed)
+            else:
+                self.crop = FixedParamsStaticCrop(x_crop)
 
         expand_fn = _expand_grayscale(False)
         self.resize_mode = resize_mode
@@ -233,35 +270,41 @@ class SceneDataset(Dataset):
         else:
             raise NotImplementedError
 
-        self.transform = transforms.Compose([
+        img_transforms = [
             transforms.Lambda(convert_rgb),
             transforms.Lambda(partial(resize_to_minimum_size, image_size)),
             *resize_transform,
             transforms.ToTensor(),
             transforms.Lambda(expand_fn)
-        ])
+        ]
 
         if label_mode == 'point':
             label_transforms = [
                 PointsToTensor(),
-                transforms.Resize(image_size),
+                transforms.Resize((image_size, image_size)),
                 self.crop
             ]
         elif label_mode == 'box':
             label_transforms = [
                 BoxesToTensor(),
-                transforms.Resize(image_size),
+                transforms.Resize((image_size, image_size)),
                 self.crop
             ]
         elif label_mode == 'semantic':
             label_transforms = [
-                transforms.Resize(image_size),
+                transforms.Resize((image_size, image_size)),
                 self.crop,
                 ToOnehotTensor()
             ]
         else:
             raise NotImplementedError
 
+        if self.panorama and 'train' in split_file:
+            self.augment = PanoramaHorizontalAugment(image_size)
+            img_transforms.append(self.augment)
+            label_transforms.append(self.augment)
+
+        self.transform = transforms.Compose(img_transforms)
         self.label_transform = transforms.Compose(label_transforms)
 
     def __len__(self):
@@ -277,12 +320,17 @@ class SceneDataset(Dataset):
 
         with open(objs_json_path, 'r') as f:
             objs_json = json.load(f)
-        xpos_range = get_crop_pos(objs_json, anchor_label=self.anchor_label)
+        
+        if not self.panorama:
+            xpos_range = get_crop_pos(objs_json, anchor_label=self.anchor_label)
 
-        if isinstance(self.crop, FixedParamsRandomCrop):
-            self.crop.reset(xpos_range)
+            if isinstance(self.crop, FixedParamsRandomCrop):
+                self.crop.reset(xpos_range)
+            else:
+                self.crop.cur_id = index
         else:
-            self.crop.cur_id = index
+            if hasattr(self, 'augment'):
+                self.augment.reset()
 
         labels = None
         if self.label_mode == 'point':
