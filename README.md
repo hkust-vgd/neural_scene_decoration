@@ -1,4 +1,8 @@
+# Neural Scene Decoration
+
 This is the code repository for the ECCV 2022 submission "Neural Scene Decoration from a Single Photograph".
+
+![](header.png)
 
 ### Instructions
 
