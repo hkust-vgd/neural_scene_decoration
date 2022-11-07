@@ -22,7 +22,12 @@ Structured3D
 
 where `splits` are provided in this repository, and the scenes in `data` are downloaded from Structured3D.
 
-2. Install the pip requirements.
+2. Create virtual environment and install the dependencies. By default, the CUDA version used is 11.3.
+
+```
+conda create --name nsd python=3.8
+pip install -r requirements.txt
+```
 
 3. Change dataset path (`--data`) in` train_struct3d.sh` to 
 
@@ -44,4 +49,3 @@ Please cite our paper if you find it useful for your research:
   booktitle={ECCV},
 }
 ```
-
